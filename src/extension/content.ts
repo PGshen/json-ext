@@ -67,16 +67,34 @@ function ensureOverlayStyle() {
   position: absolute;
   top: 12px;
   right: 12px;
+  width: 32px;
   height: 32px;
-  padding: 0 12px;
+  padding: 0;
   border: 1px solid #d0d7de;
   border-radius: 8px;
   background: #ffffff;
   cursor: pointer;
-  font-size: 13px;
-  line-height: 32px;
+  font-size: 20px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: #24292f;
   z-index: 1;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+#${OVERLAY_ROOT_ID} .json-ext-close:hover {
+  background: #f6f8fa;
+}
+@media (prefers-color-scheme: dark) {
+  #${OVERLAY_ROOT_ID} .json-ext-close {
+    border-color: #334155;
+    background: #0f172a;
+    color: #e2e8f0;
+  }
+  #${OVERLAY_ROOT_ID} .json-ext-close:hover {
+    background: #111f3d;
+  }
 }
 `
   document.documentElement.appendChild(style)
@@ -98,7 +116,7 @@ function mountInterceptOverlay(targetUrl: string) {
   closeButton.type = 'button'
   closeButton.className = 'json-ext-close'
   closeButton.setAttribute('aria-label', '返回原页面')
-  closeButton.textContent = '返回原页面'
+  closeButton.textContent = '×'
 
   const iframe = document.createElement('iframe')
   iframe.src = targetUrl

@@ -1,9 +1,25 @@
 /* eslint-disable react-hooks/set-state-in-effect */
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import { JSONPath } from 'jsonpath-plus'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import './App.css'
+import {
+  createTranslator,
+  getInitialLocale,
+  getInitialThemeMode,
+  persistLocale,
+  type Locale,
+  type ThemeMode,
+} from './i18n'
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [k: string]: JsonValue }
 type ViewMode = 'tree' | 'text' | 'table'
@@ -33,6 +49,17 @@ const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 const IMAGE_URL_RE = /\.(png|jpe?g|gif|webp|bmp|svg)(?:[?#].*)?$/i
 const MIN_PANE_RATIO = 0.25
 const MAX_SUBVIEW_DEPTH = 10
+const EXPAND_ALL_GUARD_COUNT = 4000
+const JSONPATH_GUARD_NODE_COUNT = 30000
+const DARK_MEDIA_QUERY = '(prefers-color-scheme: dark)'
+const TIMESTAMP_SECONDS_MIN = 946684800
+const TIMESTAMP_SECONDS_MAX = 4102444800
+const TIMESTAMP_MILLISECONDS_MIN = TIMESTAMP_SECONDS_MIN * 1000
+const TIMESTAMP_MILLISECONDS_MAX = TIMESTAMP_SECONDS_MAX * 1000
+
+function getPreferredTheme(): 'light' | 'dark' {
+  return window.matchMedia(DARK_MEDIA_QUERY).matches ? 'dark' : 'light'
+}
 
 type ValueEnhanceOptions = {
   enableImagePreview: boolean
@@ -118,12 +145,12 @@ function buildTreeAndPathMap(rootValue: JsonValue) {
   }
 }
 
-function formatPreview(value: JsonValue, nodeType: TreeNode['nodeType']) {
+function formatPreview(value: JsonValue, nodeType: TreeNode['nodeType'], t: ReturnType<typeof createTranslator>) {
   if (nodeType === 'object') {
-    return `${Object.keys(value as Record<string, JsonValue>).length} keys`
+    return t('keyCount', { count: Object.keys(value as Record<string, JsonValue>).length })
   }
   if (nodeType === 'array') {
-    return `${(value as JsonValue[]).length} items`
+    return t('itemCount', { count: (value as JsonValue[]).length })
   }
   if (nodeType === 'string') {
     const text = value as string
@@ -276,6 +303,20 @@ function scalarClass(value: JsonValue) {
   return 'string'
 }
 
+function detectTimestampUnit(value: number): 'seconds' | 'milliseconds' | null {
+  if (!Number.isFinite(value) || !Number.isInteger(value)) return null
+  if (value >= TIMESTAMP_SECONDS_MIN && value <= TIMESTAMP_SECONDS_MAX) return 'seconds'
+  if (value >= TIMESTAMP_MILLISECONDS_MIN && value <= TIMESTAMP_MILLISECONDS_MAX) return 'milliseconds'
+  return null
+}
+
+function formatTimestamp(value: number, unit: 'seconds' | 'milliseconds') {
+  const milliseconds = unit === 'seconds' ? value * 1000 : value
+  const date = new Date(milliseconds)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleString()
+}
+
 function isImageUrl(value: string) {
   if (value.startsWith('data:image/')) return true
   try {
@@ -409,13 +450,49 @@ function App() {
   const [rightTextDraft, setRightTextDraft] = useState('')
   const [rightTextError, setRightTextError] = useState('')
   const [collapsedTableNodes, setCollapsedTableNodes] = useState<Set<string>>(new Set())
+  const [timeDisplayValueKeys, setTimeDisplayValueKeys] = useState<Set<string>>(new Set())
   const [rightLocalSelectedPath, setRightLocalSelectedPath] = useState<string | null>(null)
   const [rightExpandedPaths, setRightExpandedPaths] = useState<Set<string>>(new Set())
   const [subviewStack, setSubviewStack] = useState<RecursiveSubviewFrame[]>([])
   const [enableLatexPreview, setEnableLatexPreview] = useState(true)
   const [leftPaneRatio, setLeftPaneRatio] = useState(0.5)
   const [isRightPaneCollapsed, setIsRightPaneCollapsed] = useState(false)
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => getInitialThemeMode())
+  const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>(() => getPreferredTheme())
+  const theme = themeMode === 'system' ? systemTheme : themeMode
+  const [locale, ] = useState<Locale>(getInitialLocale())
+  const t = useMemo(() => createTranslator(locale), [locale])
   const panesRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    persistLocale(locale)
+  }, [locale])
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(DARK_MEDIA_QUERY)
+    const updateSystemTheme = () => setSystemTheme(mediaQuery.matches ? 'dark' : 'light')
+    updateSystemTheme()
+    mediaQuery.addEventListener('change', updateSystemTheme)
+
+    return () => {
+      mediaQuery.removeEventListener('change', updateSystemTheme)
+    }
+  }, [])
+
+  useEffect(() => {
+    const syncThemeMode = () => setThemeMode(getInitialThemeMode())
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== null && event.key !== 'json-ext-theme') return
+      syncThemeMode()
+    }
+
+    window.addEventListener('focus', syncThemeMode)
+    window.addEventListener('storage', onStorage)
+    return () => {
+      window.removeEventListener('focus', syncThemeMode)
+      window.removeEventListener('storage', onStorage)
+    }
+  }, [])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -434,7 +511,7 @@ function App() {
             setLoadError('')
           })
           .catch(() => {
-            setLoadError('自动拉取 JSON 失败，请确认接口可访问后重试。')
+            setLoadError(t('loadJsonFailed'))
           })
       }
       return
@@ -445,7 +522,7 @@ function App() {
       .then((result) => {
         const record = result[sessionKey] as { jsonText?: string } | undefined
         if (!record?.jsonText) {
-          setLoadError('未找到拦截数据，请刷新目标 JSON 链接后重试。')
+          setLoadError(t('noInterceptData'))
           return
         }
 
@@ -453,11 +530,13 @@ function App() {
         return chrome.storage.session.remove(sessionKey)
       })
       .catch(() => {
-        setLoadError('读取拦截数据失败，请重试。')
+        setLoadError(t('readInterceptFailed'))
       })
   }, [])
 
-  const { parsed, error } = useMemo(() => parseJsonSafely(sourceText), [sourceText])
+  const deferredSourceText = useDeferredValue(sourceText)
+  const isSourceDeferred = deferredSourceText !== sourceText
+  const { parsed, error } = useMemo(() => parseJsonSafely(deferredSourceText), [deferredSourceText])
   const { rootNode, pathMap, parentPathMap, nodeMap, allPaths } = useMemo(() => {
     if (parsed === undefined) {
       return {
@@ -499,7 +578,7 @@ function App() {
   const activeSubview = subviewStack.length > 0 ? subviewStack[subviewStack.length - 1] : null
   const rightRootValue = activeSubview ? activeSubview.rootValue : hasSelectedNode ? (selectedValue as JsonValue) : undefined
   const hasRightRoot = rightRootValue !== undefined
-  const rightContextLabel = activeSubview ? activeSubview.title : selectedPath ?? '$'
+  // const rightContextLabel = activeSubview ? activeSubview.title : selectedPath ?? '$'
   const rightContextPath = selectedPath ?? '$'
   const {
     rootNode: rightRootNode,
@@ -594,6 +673,7 @@ function App() {
 
   useEffect(() => {
     setCollapsedTableNodes(new Set())
+    setTimeDisplayValueKeys(new Set())
   }, [parsed, selectedPath, subviewStack.length, rightLocalSelectedPath])
 
   useEffect(() => {
@@ -629,6 +709,15 @@ function App() {
   }
 
   const expandAll = () => {
+    if (allPaths.length > EXPAND_ALL_GUARD_COUNT) {
+      const confirmed = window.confirm(
+        t('expandAllConfirm', { count: allPaths.length }),
+      )
+      if (!confirmed) {
+        setActionMessage(t('canceledExpandAll'))
+        return
+      }
+    }
     setExpandedPaths(new Set(allPaths))
   }
 
@@ -710,7 +799,7 @@ function App() {
               type="button"
               className="tree-toggle"
               onClick={() => options.onToggle(node.path)}
-              aria-label={isExpanded ? '折叠节点' : '展开节点'}
+              aria-label={isExpanded ? t('foldNode') : t('expandNode')}
             >
               {isExpanded ? '▾' : '▸'}
             </button>
@@ -721,7 +810,7 @@ function App() {
           <button type="button" className="tree-label" onClick={() => options.onSelect(node.path)}>
             <span className="tree-key">{node.label}</span>
             <span className="tree-type">{node.nodeType}</span>
-            <span className="tree-preview">{formatPreview(node.value, node.nodeType)}</span>
+            <span className="tree-preview">{formatPreview(node.value, node.nodeType, t)}</span>
           </button>
         </div>
 
@@ -729,15 +818,56 @@ function App() {
           <ul className="tree-list">{node.children.map((child) => renderTree(child, options, depth + 1))}</ul>
         ) : isContainer && isExpanded ? (
           <div className="tree-empty" style={{ marginLeft: `${(depth + 1) * 14 + 24}px` }}>
-            {node.nodeType === 'array' ? '空数组 []' : '空对象 {}'}
+            {node.nodeType === 'array' ? t('emptyArray') : t('emptyObject')}
           </div>
         ) : null}
       </li>
     )
   }
 
-  const renderScalar = (value: JsonValue, enhanceOptions: ValueEnhanceOptions) => {
+  const toggleNestedTable = (nodeKey: string) => {
+    setCollapsedTableNodes((prev) => {
+      const next = new Set(prev)
+      if (next.has(nodeKey)) next.delete(nodeKey)
+      else next.add(nodeKey)
+      return next
+    })
+  }
+
+  const toggleScalarTimeDisplay = (valueKey: string) => {
+    setTimeDisplayValueKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(valueKey)) next.delete(valueKey)
+      else next.add(valueKey)
+      return next
+    })
+  }
+
+  const renderScalar = (value: JsonValue, path: string, contextKey: string, enhanceOptions: ValueEnhanceOptions) => {
     const display = value === null ? 'null' : String(value)
+    if (typeof value === 'number') {
+      const timestampUnit = detectTimestampUnit(value)
+      if (!timestampUnit) {
+        return <span className={`json-scalar ${scalarClass(value)}`}>{display}</span>
+      }
+      const valueKey = `${contextKey}:${path}`
+      const showTime = timeDisplayValueKeys.has(valueKey)
+      const renderedValue = showTime ? formatTimestamp(value, timestampUnit) : display
+      return (
+        <span className="timestamp-display">
+          <span className={`json-scalar ${scalarClass(value)}`}>{renderedValue}</span>
+          <button
+            type="button"
+            className="timestamp-toggle"
+            onClick={() => toggleScalarTimeDisplay(valueKey)}
+            aria-label={showTime ? t('showTimestamp') : t('showTime')}
+          >
+            {showTime ? t('showTimestamp') : t('showTime')}
+          </button>
+        </span>
+      )
+    }
+
     if (typeof value !== 'string') {
       return <span className={`json-scalar ${scalarClass(value)}`}>{display}</span>
     }
@@ -778,22 +908,13 @@ function App() {
         <span className="value-hover-card">
           {imagePreviewUrl ? (
             <div className="value-preview-section">
-              <strong>图片预览</strong>
-              <img src={imagePreviewUrl} alt="value preview" className="value-hover-image" loading="lazy" />
+              <strong>{t('imagePreview')}</strong>
+              <img src={imagePreviewUrl} alt={t('valuePreviewAlt')} className="value-hover-image" loading="lazy" />
             </div>
           ) : null}
         </span>
       </span>
     )
-  }
-
-  const toggleNestedTable = (nodeKey: string) => {
-    setCollapsedTableNodes((prev) => {
-      const next = new Set(prev)
-      if (next.has(nodeKey)) next.delete(nodeKey)
-      else next.add(nodeKey)
-      return next
-    })
   }
 
   const renderNestedValue = (value: JsonValue, path: string, contextKey: string, enhanceOptions: ValueEnhanceOptions) => {
@@ -817,7 +938,7 @@ function App() {
               <button
                 type="button"
                 className="nested-toggle"
-                aria-label={`切换 ${nodeKey}`}
+                aria-label={t('toggleNode', { nodeKey })}
                 onClick={() => toggleNestedTable(nodeKey)}
               >
                 +
@@ -842,7 +963,7 @@ function App() {
               <button
                 type="button"
                 className="nested-toggle"
-                aria-label={`切换 ${nodeKey}`}
+                aria-label={t('toggleNode', { nodeKey })}
                 onClick={() => toggleNestedTable(nodeKey)}
               >
                 -
@@ -886,7 +1007,7 @@ function App() {
             <button
               type="button"
               className="nested-toggle"
-              aria-label={`切换 ${nodeKey}`}
+              aria-label={t('toggleNode', { nodeKey })}
               onClick={() => toggleNestedTable(nodeKey)}
             >
               -
@@ -896,7 +1017,7 @@ function App() {
             <thead>
               <tr>
                 <th>#</th>
-                <th>value</th>
+                <th>{t('valueLabel')}</th>
               </tr>
             </thead>
             <tbody>
@@ -934,7 +1055,7 @@ function App() {
               <button
                 type="button"
                 className="nested-toggle"
-                aria-label={`切换 ${nodeKey}`}
+                aria-label={t('toggleNode', { nodeKey })}
                 onClick={() => toggleNestedTable(nodeKey)}
               >
                 +
@@ -951,7 +1072,7 @@ function App() {
             <button
               type="button"
               className="nested-toggle"
-              aria-label={`切换 ${nodeKey}`}
+              aria-label={t('toggleNode', { nodeKey })}
               onClick={() => toggleNestedTable(nodeKey)}
             >
               -
@@ -971,12 +1092,12 @@ function App() {
       )
     }
 
-    return renderScalar(value, enhanceOptions)
+    return renderScalar(value, path, contextKey, enhanceOptions)
   }
 
   const renderTable = (value: JsonValue | null, contextKey: string, enhanceOptions: ValueEnhanceOptions) => {
     if (value === null) {
-      return <p className="muted">无可展示数据。</p>
+      return <p className="muted">{t('noData')}</p>
     }
     return <div className="table-wrap">{renderNestedValue(value, '$', contextKey, enhanceOptions)}</div>
   }
@@ -987,16 +1108,16 @@ function App() {
       setActionError('')
     } catch (error) {
       setActionMessage('')
-      setActionError(error instanceof Error ? error.message : '操作失败')
+      setActionError(error instanceof Error ? error.message : t('actionFailed'))
     }
   }
 
   const parseRightDraft = () => {
     if (!hasRightSelection) {
-      throw new Error('请先选择有效节点。')
+      throw new Error(t('selectValidNodeFirst'))
     }
     if (!rightTextDraft.trim()) {
-      throw new Error('右侧文本为空。')
+      throw new Error(t('rightTextEmpty'))
     }
     return JSON.parse(rightTextDraft) as JsonValue
   }
@@ -1006,7 +1127,7 @@ function App() {
       const value = parseRightDraft()
       setRightTextError('')
       setRightTextDraft(JSON.stringify(value, null, 2))
-      setActionMessage('右侧文本格式化完成。')
+      setActionMessage(t('rightTextFormatted'))
     })
 
   const handleMinify = () =>
@@ -1014,26 +1135,26 @@ function App() {
       const value = parseRightDraft()
       setRightTextError('')
       setRightTextDraft(JSON.stringify(value))
-      setActionMessage('右侧文本压缩完成。')
+      setActionMessage(t('rightTextMinified'))
     })
 
   const handleEscape = () =>
     handleAction(() => {
       const value = parseRightDraft()
       if (typeof value !== 'string') {
-        throw new Error('转义仅支持字符串类型的右侧文本。')
+        throw new Error(t('escapeOnlyString'))
       }
       const next = JSON.stringify(value).slice(1, -1)
       setRightTextError('')
       setRightTextDraft(JSON.stringify(next))
-      setActionMessage('右侧文本转义完成。')
+      setActionMessage(t('rightTextEscaped'))
     })
 
   const handleUnescape = () =>
     handleAction(() => {
       const value = parseRightDraft()
       if (typeof value !== 'string') {
-        throw new Error('反转义仅支持字符串类型的右侧文本。')
+        throw new Error(t('unescapeOnlyString'))
       }
       let next = value
       try {
@@ -1045,35 +1166,49 @@ function App() {
       setRightTextDraft(JSON.stringify(next))
       const parsedSubview = parseJsonSafely(next).parsed
       if (parsedSubview === undefined) {
-        setActionMessage('右侧文本反转义完成。')
+        setActionMessage(t('rightTextUnescaped'))
         return
       }
       if (subviewStack.length >= MAX_SUBVIEW_DEPTH) {
-        throw new Error(`子视图层级已达上限（${MAX_SUBVIEW_DEPTH} 层）。`)
+        throw new Error(t('subviewDepthLimit', { depth: MAX_SUBVIEW_DEPTH }))
       }
       setSubviewStack((prev) => [
         ...prev,
         {
           id: `${Date.now()}-${Math.random()}`,
-          title: `子视图 ${prev.length + 1}`,
+          title: t('subviewTitle', { index: prev.length + 1 }),
           rootValue: parsedSubview,
         },
       ])
-      setActionMessage('右侧文本反转义完成，并已进入子视图。')
+      setActionMessage(t('rightTextUnescapedEnterSubview'))
     })
 
   const handleJsonPath = () =>
     handleAction(() => {
       const rootValue = parsed
       if (rootValue === undefined) {
-        throw new Error('当前 JSON 无法解析，无法执行 JSONPath。')
+        throw new Error(t('invalidJsonForJsonPath'))
       }
       const selected = hasRightSelection ? (rightSelectedValue as JsonValue) : null
       if (jsonPathScope === 'selected' && selected === null) {
-        throw new Error('请先选择有效节点，或切换到全局作用域。')
+        throw new Error(t('selectNodeOrGlobalScope'))
       }
       if (!jsonPathExpr.trim()) {
-        throw new Error('请输入 JSONPath 表达式。')
+        throw new Error(t('inputJsonPathExpr'))
+      }
+      if (jsonPathScope === 'root' && allPaths.length > JSONPATH_GUARD_NODE_COUNT) {
+        throw new Error(
+          t('rootScopeTooLarge', { count: allPaths.length }),
+        )
+      }
+      if (jsonPathScope === 'selected' && rightPathMap.size > JSONPATH_GUARD_NODE_COUNT) {
+        const confirmed = window.confirm(
+          t('selectedScopeMaybeSlow', { count: rightPathMap.size }),
+        )
+        if (!confirmed) {
+          setActionMessage(t('canceledJsonPath'))
+          return
+        }
       }
       try {
         const result = JSONPath({
@@ -1084,29 +1219,87 @@ function App() {
         setJsonPathResult(result)
         setJsonPathError('')
         setActionMessage(
-          `JSONPath 执行完成（${jsonPathScope === 'root' ? '全局' : '当前节点'}），命中 ${result.length} 条。`,
+          t('jsonPathDone', {
+            scope: jsonPathScope === 'root' ? t('global') : t('currentNode'),
+            count: result.length,
+          }),
         )
       } catch (error) {
         setJsonPathResult(null)
-        const message = error instanceof Error ? error.message : 'JSONPath 执行失败'
+        const message = error instanceof Error ? error.message : t('jsonPathRunFailed')
         setJsonPathError(message)
         throw new Error(message)
       }
     })
 
+  const copyText = async (content: string) => {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(content)
+        return
+      } catch {
+        // Ignore and fallback to execCommand.
+      }
+    }
+
+    const textarea = document.createElement('textarea')
+    textarea.value = content
+    textarea.setAttribute('readonly', '')
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    textarea.style.pointerEvents = 'none'
+    textarea.style.top = '0'
+    textarea.style.left = '0'
+    document.body.appendChild(textarea)
+    textarea.focus()
+    textarea.select()
+    textarea.setSelectionRange(0, textarea.value.length)
+
+    const copied = document.execCommand('copy')
+    document.body.removeChild(textarea)
+    if (!copied) {
+      throw new Error(t('clipboardBlocked'))
+    }
+  }
+
   const handleCopyJsonPathResult = async () => {
     if (!jsonPathResult) return
     const content = JSON.stringify(jsonPathResult, null, 2)
     try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error('当前环境不支持剪贴板复制。')
-      }
-      await navigator.clipboard.writeText(content)
+      await copyText(content)
       setActionError('')
-      setActionMessage('JSONPath 结果已复制。')
+      setActionMessage(t('jsonPathCopied'))
     } catch (error) {
       setActionMessage('')
-      setActionError(error instanceof Error ? error.message : '复制失败')
+      setActionError(error instanceof Error ? error.message : t('copyFailed'))
+    }
+  }
+
+  const handleCopyCurrentNode = async () => {
+    if (!hasRightSelection) {
+      setActionMessage('')
+      setActionError(t('selectValidNodeFirst'))
+      return
+    }
+
+    const content =
+      rightViewMode === 'text'
+        ? rightTextDraft
+        : JSON.stringify((rightSelectedValue as JsonValue) ?? null, null, 2)
+
+    if (!content.trim()) {
+      setActionMessage('')
+      setActionError(t('contentEmptyCannotCopy'))
+      return
+    }
+
+    try {
+      await copyText(content)
+      setActionError('')
+      setActionMessage(t('contentCopied'))
+    } catch (error) {
+      setActionMessage('')
+      setActionError(error instanceof Error ? error.message : t('copyFailed'))
     }
   }
 
@@ -1118,15 +1311,15 @@ function App() {
     setJsonPathError('')
     if (!leftTextDraft.trim()) {
       setSourceText('')
-      setActionMessage('左侧文本已清空。')
+      setActionMessage(t('leftTextCleared'))
       return
     }
     try {
       JSON.parse(leftTextDraft)
       setSourceText(leftTextDraft)
-      setActionMessage('左侧文本已应用到源 JSON。')
+      setActionMessage(t('leftTextApplied'))
     } catch (error) {
-      setLeftTextError(error instanceof Error ? error.message : 'JSON 解析失败')
+      setLeftTextError(error instanceof Error ? error.message : t('jsonParseFailedShort'))
     }
   }
 
@@ -1138,15 +1331,15 @@ function App() {
     try {
       const formatted = JSON.stringify(JSON.parse(leftTextDraft) as JsonValue, null, 2)
       setLeftTextDraft(formatted)
-      setActionMessage('左侧文本格式化完成。')
+      setActionMessage(t('leftTextFormatted'))
     } catch (error) {
-      setLeftTextError(error instanceof Error ? error.message : 'JSON 解析失败')
+      setLeftTextError(error instanceof Error ? error.message : t('jsonParseFailedShort'))
     }
   }
 
   const applyRightTextDraft = () => {
     if (!hasRightSelection || !rightLocalSelectedPath) {
-      setRightTextError('请先选择有效节点。')
+      setRightTextError(t('selectValidNodeFirst'))
       return
     }
     setRightTextError('')
@@ -1167,19 +1360,19 @@ function App() {
           }
           return next
         })
-        setActionMessage('右侧文本已应用到子视图节点。')
+        setActionMessage(t('rightTextAppliedSubview'))
         return
       }
 
       if (!hasSelectedNode || !selectedPath || parsed === undefined) {
-        throw new Error('请先选择有效节点。')
+        throw new Error(t('selectValidNodeFirst'))
       }
       const absolutePath = mergePaths(selectedPath, rightLocalSelectedPath)
       const nextRoot = updateValueAtPath(parsed, absolutePath, nextValue)
       setSourceText(JSON.stringify(nextRoot, null, 2))
-      setActionMessage('右侧文本已应用到当前节点。')
+      setActionMessage(t('rightTextAppliedCurrent'))
     } catch (error) {
-      setRightTextError(error instanceof Error ? error.message : '节点 JSON 解析失败')
+      setRightTextError(error instanceof Error ? error.message : t('nodeJsonParseFailed'))
     }
   }
 
@@ -1215,7 +1408,18 @@ function App() {
   }, [])
 
   return (
-    <main className="workspace">
+    <main className={`workspace theme-${theme}`}>
+      {/* <div className="locale-switch">
+        <label htmlFor="locale-select">{t('localeLabel')}</label>
+        <select
+          id="locale-select"
+          value={locale}
+          onChange={(event) => setLocale(event.target.value as Locale)}
+        >
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
+      </div> */}
       {/* <header className="topbar">
         <div>
           <strong>JSON-Ext M3</strong>
@@ -1233,15 +1437,16 @@ function App() {
           className="pane pane-left"
           style={!isRightPaneCollapsed ? { flexGrow: leftPaneRatio, flexBasis: 0 } : undefined}
         >
-          <h2>源 JSON</h2>
+          <h2>{t('workspaceTitle')}</h2>
           {mode !== 'intercept' ? (
             <textarea
               value={sourceText}
               onChange={(event) => setSourceText(event.target.value)}
-              placeholder="在此输入 JSON，或通过 JSON 链接自动接管..."
+              placeholder={t('sourcePlaceholder')}
             />
           ) : null}
-          {error ? <p className="error-text">JSON 解析失败：{error}</p> : null}
+          {isSourceDeferred ? <p className="muted">{t('parsingJson')}</p> : null}
+          {error ? <p className="error-text">{t('jsonParseFailed', { error })}</p> : null}
 
           <div className="view-switch">
             <button
@@ -1249,21 +1454,21 @@ function App() {
               className={leftViewMode === 'tree' ? 'active' : ''}
               onClick={() => setLeftViewMode('tree')}
             >
-              树形
+              {t('tree')}
             </button>
             <button
               type="button"
               className={leftViewMode === 'text' ? 'active' : ''}
               onClick={() => setLeftViewMode('text')}
             >
-              文本
+              {t('text')}
             </button>
             <button
               type="button"
               className={leftViewMode === 'table' ? 'active' : ''}
               onClick={() => setLeftViewMode('table')}
             >
-              表格
+              {t('table')}
             </button>
           </div>
 
@@ -1271,23 +1476,23 @@ function App() {
             <div className="tree-panel" tabIndex={0} onKeyDown={onTreeKeyDown}>
               <div className="tree-header">
                 <div className="tree-title-group">
-                  <strong>树形图模式</strong>
+                  <strong>{t('treeMode')}</strong>
                   <span className="tree-meta">
-                    可见 {visibleNodeCount} / 总计 {totalNodeCount}
+                    {t('visibleSummary', { visible: visibleNodeCount, total: totalNodeCount })}
                   </span>
                 </div>
                 <div className="tree-actions">
                   <button type="button" onClick={expandAll}>
-                    展开全部
+                    {t('expandAll')}
                   </button>
                   <button type="button" onClick={collapseAll}>
-                    折叠全部
+                    {t('collapseAll')}
                   </button>
                 </div>
               </div>
               <div className="tree-scroll">
                 {!rootNode ? (
-                  <p className="muted">无可选节点（请先输入合法 JSON）</p>
+                  <p className="muted">{t('noSelectableNode')}</p>
                 ) : (
                   <ul className="tree-list">
                     {renderTree(rootNode, {
@@ -1305,17 +1510,17 @@ function App() {
               <textarea
                 value={leftTextDraft}
                 onChange={(event) => setLeftTextDraft(event.target.value)}
-                placeholder="编辑完整 JSON 后点击应用"
+                placeholder={t('fullJsonEditorPlaceholder')}
               />
               <div className="text-editor-actions">
                 <button type="button" onClick={formatLeftTextDraft}>
-                  格式化
+                  {t('format')}
                 </button>
                 <button type="button" onClick={applyLeftTextDraft}>
-                  应用到左侧源 JSON
+                  {t('applyToLeftSource')}
                 </button>
               </div>
-              {leftTextError ? <p className="error-text">左侧文本错误：{leftTextError}</p> : null}
+              {leftTextError ? <p className="error-text">{t('leftTextError', { error: leftTextError })}</p> : null}
             </div>
           ) : (
             renderTable(parsed ?? null, 'left', { enableImagePreview: false, enableLatexPreview: false })
@@ -1327,19 +1532,19 @@ function App() {
             <div
               className="pane-resizer"
               role="separator"
-              aria-label="调整左右面板宽度"
+              aria-label={t('resizePanes')}
               aria-orientation="vertical"
               onMouseDown={startPaneResize}
             />
             <section className="pane pane-right" style={{ flexGrow: 1 - leftPaneRatio, flexBasis: 0 }}>
               <div className="pane-title-row">
-                <h2>节点详情</h2>
+                <h2>{t('nodeDetail')}</h2>
                 <button type="button" className="pane-collapse-btn" onClick={() => setIsRightPaneCollapsed(true)}>
-                  收起
+                  {t('collapse')}
                 </button>
               </div>
               {!hasRightRoot ? (
-                <p className="muted">请选择左侧节点查看详情。</p>
+                <p className="muted">{t('selectLeftNodeHint')}</p>
               ) : (
                 <div className="detail">
               <div className="detail-item">
@@ -1349,7 +1554,7 @@ function App() {
                     className={subviewStack.length === 0 ? 'active' : ''}
                     onClick={() => setSubviewStack([])}
                   >
-                    主视图
+                    {t('mainView')}
                   </button>
                   {subviewStack.map((frame, index) => (
                     <button
@@ -1362,7 +1567,7 @@ function App() {
                     </button>
                   ))}
                 </div>
-                <span>{rightContextLabel}</span>
+                {/* <span>{rightContextLabel}</span> */}
                 <code data-testid="right-active-path">{rightSelectedAbsolutePath}</code>
               </div>
               <div className="view-switch">
@@ -1371,21 +1576,21 @@ function App() {
                   className={rightViewMode === 'tree' ? 'active' : ''}
                   onClick={() => setRightViewMode('tree')}
                 >
-                  树形
+                  {t('tree')}
                 </button>
                 <button
                   type="button"
                   className={rightViewMode === 'text' ? 'active' : ''}
                   onClick={() => setRightViewMode('text')}
                 >
-                  文本
+                  {t('text')}
                 </button>
                 <button
                   type="button"
                   className={rightViewMode === 'table' ? 'active' : ''}
                   onClick={() => setRightViewMode('table')}
                 >
-                  表格
+                  {t('table')}
                 </button>
                 {rightViewMode === 'table' ? (
                   <label className="table-enhance-switch">
@@ -1394,25 +1599,34 @@ function App() {
                       checked={enableLatexPreview}
                       onChange={(event) => setEnableLatexPreview(event.target.checked)}
                     />
-                    LaTeX 公式渲染
+                    {t('latexRender')}
                   </label>
                 ) : null}
-                {rightViewMode === 'text' ? (
-                  <div className="ops ops-inline">
+                <div className="ops ops-inline">
+                  <button type="button" onClick={() => void handleCopyCurrentNode()}>
+                    {t('oneClickCopy')}
+                  </button>
+                  {rightViewMode === 'text' ? (
                     <button type="button" onClick={handleFormat}>
-                      格式化
+                      {t('format')}
                     </button>
+                  ) : null}
+                  {rightViewMode === 'text' ? (
                     <button type="button" onClick={handleMinify}>
-                      压缩
+                      {t('minify')}
                     </button>
+                  ) : null}
+                  {rightViewMode === 'text' ? (
                     <button type="button" onClick={handleEscape}>
-                      转义
+                      {t('escape')}
                     </button>
+                  ) : null}
+                  {rightViewMode === 'text' ? (
                     <button type="button" onClick={handleUnescape}>
-                      反转义
+                      {t('unescape')}
                     </button>
-                  </div>
-                ) : null}
+                  ) : null}
+                </div>
               </div>
 
               <div className="detail-main">
@@ -1420,7 +1634,7 @@ function App() {
                   <div className="tree-panel">
                     <div className="tree-header">
                       <div className="tree-title-group">
-                        <strong>{activeSubview ? '子视图树' : '节点子树'}</strong>
+                        <strong>{activeSubview ? t('subviewTree') : t('nodeSubtree')}</strong>
                       </div>
                     </div>
                     <div className="tree-scroll">
@@ -1434,7 +1648,7 @@ function App() {
                           })}
                         </ul>
                       ) : (
-                        <p className="muted">无可展示数据。</p>
+                        <p className="muted">{t('noData')}</p>
                       )}
                     </div>
                   </div>
@@ -1443,14 +1657,14 @@ function App() {
                     <textarea
                       value={rightTextDraft}
                       onChange={(event) => setRightTextDraft(event.target.value)}
-                      placeholder="编辑当前节点 JSON 后点击应用"
+                      placeholder={t('currentNodeEditorPlaceholder')}
                     />
                     <div className="text-editor-actions">
                       <button type="button" onClick={applyRightTextDraft}>
-                        应用修改到当前节点
+                        {t('applyToCurrentNode')}
                       </button>
                     </div>
-                    {rightTextError ? <p className="error-text">右侧文本错误：{rightTextError}</p> : null}
+                    {rightTextError ? <p className="error-text">{t('rightTextError', { error: rightTextError })}</p> : null}
                   </div>
                 ) : (
                   renderTable((rightSelectedValue as JsonValue) ?? null, `right:${activeSubview?.id ?? rightContextPath}`, {
@@ -1477,14 +1691,14 @@ function App() {
                     className={jsonPathScope === 'selected' ? 'active' : ''}
                     onClick={() => setJsonPathScope('selected')}
                   >
-                    当前节点
+                    {t('currentNode')}
                   </button>
                   <button
                     type="button"
                     className={jsonPathScope === 'root' ? 'active' : ''}
                     onClick={() => setJsonPathScope('root')}
                   >
-                    全局
+                    {t('global')}
                   </button>
                 </div>
                 <div className="jsonpath-inputs">
@@ -1497,20 +1711,20 @@ function App() {
                         handleJsonPath()
                       }
                     }}
-                    placeholder="输入 JSONPath，例如 $..id"
+                    placeholder={t('jsonPathPlaceholder')}
                   />
                   <button type="button" onClick={handleJsonPath}>
-                    执行
+                    {t('execute')}
                   </button>
                   <button type="button" onClick={() => void handleCopyJsonPathResult()}>
-                    复制结果
+                    {t('copyResult')}
                   </button>
                 </div>
-                {jsonPathError ? <p className="error-text">JSONPath 错误：{jsonPathError}</p> : null}
+                {jsonPathError ? <p className="error-text">{t('jsonPathError', { error: jsonPathError })}</p> : null}
                 {jsonPathResult ? (
                   <div className="jsonpath-result">
                     {jsonPathResult.length === 0 ? (
-                      <p className="muted">JSONPath 执行成功，但无匹配结果。</p>
+                      <p className="muted">{t('jsonPathNoMatch')}</p>
                     ) : (
                       <pre>{JSON.stringify(jsonPathResult, null, 2)}</pre>
                     )}
@@ -1526,8 +1740,8 @@ function App() {
             type="button"
             className="pane-expand-right-btn"
             onClick={() => setIsRightPaneCollapsed(false)}
-            aria-label="展开右侧面板"
-            title="展开右侧面板"
+            aria-label={t('expandRightPane')}
+            title={t('expandRightPane')}
           >
             ◂
           </button>

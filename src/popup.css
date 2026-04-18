@@ -5,38 +5,88 @@
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #f5f7fb;
 }
 
 .popup {
-  width: 280px;
-  padding: 16px;
+  width: 360px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+  background: #fff;
+}
+
+.popup-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .popup h1 {
   margin: 0;
-  font-size: 18px;
+  font-size: 22px;
+  line-height: 1.2;
+  color: #0f172a;
 }
 
 .popup p {
   margin: 0;
-  color: #444;
+  color: #475569;
   font-size: 13px;
   line-height: 1.5;
 }
 
-.popup button {
-  border: none;
+.popup-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.popup-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.popup-field label {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.popup-field select {
+  min-width: 150px;
+  border: 1px solid #cbd5e1;
   border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  font-size: 13px;
+  padding: 7px 10px;
+}
+
+.popup-field select:focus {
+  outline: none;
+  border-color: #2962ff;
+  box-shadow: 0 0 0 3px rgba(41, 98, 255, 0.16);
+}
+
+.popup-primary {
+  border: none;
+  border-radius: 10px;
   background: #2962ff;
   color: #fff;
-  padding: 10px 12px;
-  font-size: 13px;
+  padding: 12px 14px;
+  font-size: 16px;
+  font-weight: 700;
   cursor: pointer;
 }
 
-.popup button:hover {
+.popup-primary:hover {
   background: #1f4cd1;
 }

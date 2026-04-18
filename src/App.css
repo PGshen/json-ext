@@ -7,6 +7,28 @@
   color: #111827;
 }
 
+.locale-switch {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px 0;
+}
+
+.locale-switch label {
+  font-size: 12px;
+  color: #475569;
+}
+
+.locale-switch select {
+  border: 1px solid #cfd8e3;
+  border-radius: 6px;
+  background: #fff;
+  color: #334155;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -587,6 +609,23 @@ body.is-resizing-panes {
   color: #94a3b8;
 }
 
+.timestamp-display {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.timestamp-toggle {
+  border: 1px solid #cfd8e3;
+  border-radius: 4px;
+  background: #fff;
+  color: #334155;
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+
 .enhanced-value {
   position: relative;
   display: inline-block;
@@ -778,4 +817,155 @@ body.is-resizing-panes {
   font-size: 12px;
   line-height: 1.5;
   white-space: pre;
+}
+
+.workspace.theme-dark {
+  background: #0b1220;
+  color: #e5e7eb;
+}
+
+.workspace.theme-dark .pane {
+  background: #111827;
+  border-color: #334155;
+}
+
+.workspace.theme-dark .pane-resizer {
+  background: #1f2937;
+}
+
+.workspace.theme-dark .pane-resizer:hover {
+  background: #334155;
+}
+
+.workspace.theme-dark .pane textarea,
+.workspace.theme-dark .text-editor textarea,
+.workspace.theme-dark .jsonpath-inputs input {
+  background: #0f172a;
+  color: #e5e7eb;
+  border-color: #334155;
+}
+
+.workspace.theme-dark .muted,
+.workspace.theme-dark .tree-meta,
+.workspace.theme-dark .tree-preview,
+.workspace.theme-dark .detail-item span,
+.workspace.theme-dark .jsonpath-toggle,
+.workspace.theme-dark .jsonpath > span,
+.workspace.theme-dark .value-preview-section strong {
+  color: #94a3b8;
+}
+
+.workspace.theme-dark .tree-panel,
+.workspace.theme-dark .jsonpath {
+  border-top-color: #334155;
+}
+
+.workspace.theme-dark .tree-panel:focus {
+  box-shadow: inset 0 0 0 2px #334155;
+}
+
+.workspace.theme-dark .tree-key,
+.workspace.theme-dark .nested-summary {
+  color: #e2e8f0;
+}
+
+.workspace.theme-dark .tree-type {
+  color: #cbd5e1;
+  border-color: #334155;
+  background: #1f2937;
+}
+
+.workspace.theme-dark .tree-row.selected .tree-label,
+.workspace.theme-dark .view-switch button.active,
+.workspace.theme-dark .scope-switch button.active,
+.workspace.theme-dark .subview-breadcrumbs button.active {
+  background: #1e3a8a;
+  border-color: #1d4ed8;
+  color: #dbeafe;
+}
+
+.workspace.theme-dark .tree-label:hover,
+.workspace.theme-dark .tree-actions button:hover,
+.workspace.theme-dark .tree-toggle:hover {
+  background: #1f2937;
+}
+
+.workspace.theme-dark .pane-collapse-btn,
+.workspace.theme-dark .pane-expand-right-btn,
+.workspace.theme-dark .view-switch button,
+.workspace.theme-dark .tree-actions button,
+.workspace.theme-dark .subview-breadcrumbs button,
+.workspace.theme-dark .text-editor-actions button,
+.workspace.theme-dark .scope-switch button,
+.workspace.theme-dark .jsonpath-inputs button,
+.workspace.theme-dark .jsonpath-result-actions button,
+.workspace.theme-dark .nested-toggle {
+  background: #111827;
+  color: #cbd5e1;
+  border-color: #334155;
+}
+
+.workspace.theme-dark .ops button {
+  background: #111827;
+  color: #cbd5e1;
+  border-color: #475569;
+}
+
+.workspace.theme-dark .detail-item code,
+.workspace.theme-dark .detail-item pre,
+.workspace.theme-dark .jsonpath-result pre,
+.workspace.theme-dark .table-wrap,
+.workspace.theme-dark .text-view {
+  background: #0f172a;
+  border-color: #334155;
+  color: #e5e7eb;
+}
+
+.workspace.theme-dark .json-table {
+  background: #0f172a;
+  color: #e5e7eb;
+}
+
+.workspace.theme-dark .json-table th,
+.workspace.theme-dark .json-table td {
+  border-color: #334155;
+}
+
+.workspace.theme-dark .json-table th {
+  background: #1f2937;
+  color: #e2e8f0;
+}
+
+.workspace.theme-dark .json-scalar.string {
+  color: #e2e8f0;
+}
+
+.workspace.theme-dark .json-scalar.number {
+  color: #38bdf8;
+}
+
+.workspace.theme-dark .json-scalar.boolean {
+  color: #fbbf24;
+}
+
+.workspace.theme-dark .json-scalar.null,
+.workspace.theme-dark .tree-empty {
+  color: #94a3b8;
+}
+
+.workspace.theme-dark .timestamp-toggle {
+  background: #111827;
+  color: #cbd5e1;
+  border-color: #334155;
+}
+
+.workspace.theme-dark .value-hover-card {
+  background: #0f172a;
+  border-color: #334155;
+  box-shadow: 0 8px 24px rgb(2 6 23 / 55%);
+}
+
+.workspace.theme-dark .value-hover-image {
+  background: #0b1220;
+  border-color: #334155;
 }
