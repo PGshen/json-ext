@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "JSON-Ext",
+  "description": "JSON tools for inspect, edit, and analyze API payloads.",
+  "version": "0.1.0",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "Open JSON-Ext",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["index.html", "assets/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
