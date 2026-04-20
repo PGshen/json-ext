@@ -2,8 +2,7 @@
 
 import {
   MESSAGE_TYPE_OPEN_JSON_TOOL,
-  QUERY_MODE_INTERCEPT,
-  QUERY_MODE_STANDALONE,
+  QUERY_MODE_INTERCEPT
 } from './constants'
 
 type OpenJsonToolMessage = {
@@ -12,10 +11,6 @@ type OpenJsonToolMessage = {
     jsonText: string
     sourceUrl: string
   }
-}
-
-function getStandaloneUrl() {
-  return `${chrome.runtime.getURL('index.html')}?mode=${QUERY_MODE_STANDALONE}`
 }
 
 async function createInterceptToolUrl(payload: OpenJsonToolMessage['payload']) {
@@ -49,10 +44,4 @@ chrome.runtime.onMessage.addListener((message: OpenJsonToolMessage, _sender, sen
     })
 
   return true
-})
-
-chrome.action.onClicked.addListener(() => {
-  chrome.tabs.create({ url: getStandaloneUrl() }).catch((error: unknown) => {
-    console.error('[JSON-Ext] Failed to open standalone tab:', error)
-  })
 })

@@ -28,7 +28,7 @@ export function Popup() {
 
   const openStandalone = () => {
     const url = `${chrome.runtime.getURL('index.html')}?mode=standalone`
-    chrome.tabs.create({ url })
+    window.open(url, '_blank', 'noopener')
     window.close()
   }
 
