@@ -145,21 +145,6 @@ function buildTreeAndPathMap(rootValue: JsonValue) {
   }
 }
 
-function formatPreview(value: JsonValue, nodeType: TreeNode['nodeType'], t: ReturnType<typeof createTranslator>) {
-  if (nodeType === 'object') {
-    return t('keyCount', { count: Object.keys(value as Record<string, JsonValue>).length })
-  }
-  if (nodeType === 'array') {
-    return t('itemCount', { count: (value as JsonValue[]).length })
-  }
-  if (nodeType === 'string') {
-    const text = value as string
-    const compact = text.length > 28 ? `${text.slice(0, 28)}...` : text
-    return JSON.stringify(compact)
-  }
-  return String(value)
-}
-
 function parseJsonSafely(text: string): ParseJsonResult {
   if (!text.trim()) {
     return { parsed: undefined, error: '' }
@@ -708,6 +693,14 @@ function App() {
     })
   }
 
+  const expandAllRight = () => {
+    setRightExpandedPaths(new Set(rightPathMap.keys()))
+  }
+
+  const collapseAllRight = () => {
+    setRightExpandedPaths(new Set(['$']))
+  }
+
   const expandAll = () => {
     if (allPaths.length > EXPAND_ALL_GUARD_COUNT) {
       const confirmed = window.confirm(
@@ -786,14 +779,27 @@ function App() {
     }
   }
 
-  const renderTree = (node: TreeNode, options: TreeRenderOptions, depth = 0) => {
+  const renderTree = (node: TreeNode, options: TreeRenderOptions, depth = 0, isLast = true) => {
     const isContainer = node.nodeType === 'object' || node.nodeType === 'array'
     const isExpanded = options.expandedPaths.has(node.path)
     const isSelected = options.selectedPath === node.path
+    const isRoot = node.path === '$'
+    const openToken = node.nodeType === 'array' ? '[' : '{'
+    const closeToken = node.nodeType === 'array' ? ']' : '}'
+    const displayKey =
+      isRoot ? '' : /^\[\d+\]$/.test(node.label) ? node.label : JSON.stringify(node.label)
+    const containerSummary = isContainer
+      ? node.nodeType === 'array'
+        ? `Array [${(node.value as JsonValue[]).length}]`
+        : `Object {${Object.keys(node.value as Record<string, JsonValue>).length}}`
+      : ''
+    const scalarLiteral =
+      node.nodeType === 'string' ? JSON.stringify(node.value as string) : String(node.value)
+    const rowPadding = `${depth * 16}px`
 
     return (
       <li key={node.path}>
-        <div className={`tree-row ${isSelected ? 'selected' : ''}`} style={{ paddingLeft: `${depth * 14}px` }}>
+        <div className={`tree-code-row ${isSelected ? 'selected' : ''}`} style={{ paddingLeft: rowPadding }}>
           {isContainer ? (
             <button
               type="button"
@@ -806,19 +812,47 @@ function App() {
           ) : (
             <span className="tree-toggle-placeholder" />
           )}
-
-          <button type="button" className="tree-label" onClick={() => options.onSelect(node.path)}>
-            <span className="tree-key">{node.label}</span>
-            <span className="tree-type">{node.nodeType}</span>
-            <span className="tree-preview">{formatPreview(node.value, node.nodeType, t)}</span>
+          <button type="button" className="tree-code-main" onClick={() => options.onSelect(node.path)}>
+            {!isRoot ? <span className="tree-json-key">{displayKey}</span> : null}
+            {!isRoot ? <span className="tree-json-colon">: </span> : null}
+            {isContainer && isExpanded ? <span className="tree-json-brace">{openToken}</span> : null}
+            {isContainer && !isExpanded ? (
+              <>
+                <span className="tree-inline-summary">{containerSummary}</span>
+                {!isLast ? <span className="tree-json-comma">,</span> : null}
+              </>
+            ) : null}
+            {!isContainer ? (
+              <>
+                <span className={`tree-json-value ${node.nodeType}`}>{scalarLiteral}</span>
+                {!isLast ? <span className="tree-json-comma">,</span> : null}
+              </>
+            ) : null}
           </button>
         </div>
 
         {isContainer && isExpanded && node.children.length > 0 ? (
-          <ul className="tree-list">{node.children.map((child) => renderTree(child, options, depth + 1))}</ul>
+          <>
+            <ul className="tree-list">
+              {node.children.map((child, index) =>
+                renderTree(child, options, depth + 1, index === node.children.length - 1),
+              )}
+            </ul>
+            <div className="tree-code-row tree-close-row" style={{ paddingLeft: rowPadding }}>
+              <span className="tree-toggle-placeholder" />
+              <span className="tree-json-brace">
+                {closeToken}
+                {!isLast ? ',' : ''}
+              </span>
+            </div>
+          </>
         ) : isContainer && isExpanded ? (
-          <div className="tree-empty" style={{ marginLeft: `${(depth + 1) * 14 + 24}px` }}>
-            {node.nodeType === 'array' ? t('emptyArray') : t('emptyObject')}
+          <div className="tree-code-row tree-close-row" style={{ paddingLeft: rowPadding }}>
+            <span className="tree-toggle-placeholder" />
+            <span className="tree-json-brace">
+              {closeToken}
+              {!isLast ? ',' : ''}
+            </span>
           </div>
         ) : null}
       </li>
@@ -1635,6 +1669,14 @@ function App() {
                     <div className="tree-header">
                       <div className="tree-title-group">
                         <strong>{activeSubview ? t('subviewTree') : t('nodeSubtree')}</strong>
+                      </div>
+                      <div className="tree-actions">
+                        <button type="button" onClick={expandAllRight}>
+                          {t('expandAll')}
+                        </button>
+                        <button type="button" onClick={collapseAllRight}>
+                          {t('collapseAll')}
+                        </button>
                       </div>
                     </div>
                     <div className="tree-scroll">
