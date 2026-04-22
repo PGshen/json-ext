@@ -97,6 +97,10 @@ const messages: Record<Locale, Record<string, string>> = {
     expandAllConfirm: '当前节点总数约 {{count}}，展开全部可能造成明显卡顿。是否继续展开？',
     canceledExpandAll: '已取消展开全部。',
     cancelJsonPathConfirm: '已取消 JSONPath 执行。',
+    largeJsonGuardTitle: '检测到超大 JSON，已暂停自动解析。',
+    largeJsonGuardDesc:
+      '当前内容长度约 {{count}} 字符。为避免页面卡死与白屏，默认不自动建树；点击下方按钮后继续。',
+    continueParseLargeJson: '继续解析（可能较慢）',
     keyCount: '{{count}} keys',
     itemCount: '{{count}} items',
     popupDescription: '打开独立工作区来编辑和分析 JSON。',
@@ -199,6 +203,10 @@ const messages: Record<Locale, Record<string, string>> = {
     expandAllConfirm: 'Current node count is around {{count}}. Expand all may cause lag. Continue?',
     canceledExpandAll: 'Expand all canceled.',
     cancelJsonPathConfirm: 'JSONPath execution canceled.',
+    largeJsonGuardTitle: 'Very large JSON detected. Auto-parse is paused.',
+    largeJsonGuardDesc:
+      'Current payload is about {{count}} characters. To avoid freezing and blank screens, tree building is paused by default.',
+    continueParseLargeJson: 'Continue Parsing (May Be Slow)',
     keyCount: '{{count}} keys',
     itemCount: '{{count}} items',
     popupDescription: 'Open a standalone workspace for editing and analyzing JSON.',

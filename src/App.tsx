@@ -56,6 +56,7 @@ const TIMESTAMP_SECONDS_MIN = 946684800
 const TIMESTAMP_SECONDS_MAX = 4102444800
 const TIMESTAMP_MILLISECONDS_MIN = TIMESTAMP_SECONDS_MIN * 1000
 const TIMESTAMP_MILLISECONDS_MAX = TIMESTAMP_SECONDS_MAX * 1000
+const LARGE_JSON_PARSE_GUARD_CHARS = 2_000_000
 
 function getPreferredTheme(): 'light' | 'dark' {
   return window.matchMedia(DARK_MEDIA_QUERY).matches ? 'dark' : 'light'
@@ -399,6 +400,10 @@ function renderLatexHtml(expression: string, displayMode: boolean) {
   })
 }
 
+function buildParseApprovalSignature(text: string) {
+  return `${text.length}:${text.slice(0, 128)}`
+}
+
 async function fetchSourceJson(sourceUrl: string) {
   const response = await fetch(sourceUrl, {
     credentials: 'include',
@@ -409,9 +414,7 @@ async function fetchSourceJson(sourceUrl: string) {
     throw new Error(`HTTP ${response.status}`)
   }
 
-  const text = await response.text()
-  JSON.parse(text)
-  return text
+  return response.text()
 }
 
 function App() {
@@ -445,6 +448,7 @@ function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => getInitialThemeMode())
   const [systemTheme, setSystemTheme] = useState<'light' | 'dark'>(() => getPreferredTheme())
   const theme = themeMode === 'system' ? systemTheme : themeMode
+  const [parseApprovalSignature, setParseApprovalSignature] = useState<string | null>(null)
   const [locale, ] = useState<Locale>(getInitialLocale())
   const t = useMemo(() => createTranslator(locale), [locale])
   const panesRef = useRef<HTMLElement | null>(null)
@@ -519,9 +523,17 @@ function App() {
       })
   }, [])
 
-  const deferredSourceText = useDeferredValue(sourceText)
-  const isSourceDeferred = deferredSourceText !== sourceText
-  const { parsed, error } = useMemo(() => parseJsonSafely(deferredSourceText), [deferredSourceText])
+  const sourceParseSignature = useMemo(() => buildParseApprovalSignature(sourceText), [sourceText])
+  const requiresLargeJsonApproval = sourceText.length > LARGE_JSON_PARSE_GUARD_CHARS
+  const canParseSource = !requiresLargeJsonApproval || parseApprovalSignature === sourceParseSignature
+  const deferredSourceText = useDeferredValue(canParseSource ? sourceText : '')
+  const isSourceDeferred = canParseSource && deferredSourceText !== sourceText
+  const { parsed, error } = useMemo(() => {
+    if (!canParseSource) {
+      return { parsed: undefined, error: '' }
+    }
+    return parseJsonSafely(deferredSourceText)
+  }, [canParseSource, deferredSourceText])
   const { rootNode, pathMap, parentPathMap, nodeMap, allPaths } = useMemo(() => {
     if (parsed === undefined) {
       return {
@@ -1478,6 +1490,15 @@ function App() {
               onChange={(event) => setSourceText(event.target.value)}
               placeholder={t('sourcePlaceholder')}
             />
+          ) : null}
+          {requiresLargeJsonApproval && !canParseSource ? (
+            <div className="error-banner">
+              <strong>{t('largeJsonGuardTitle')}</strong>
+              <p>{t('largeJsonGuardDesc', { count: sourceText.length })}</p>
+              <button type="button" onClick={() => setParseApprovalSignature(sourceParseSignature)}>
+                {t('continueParseLargeJson')}
+              </button>
+            </div>
           ) : null}
           {isSourceDeferred ? <p className="muted">{t('parsingJson')}</p> : null}
           {error ? <p className="error-text">{t('jsonParseFailed', { error })}</p> : null}

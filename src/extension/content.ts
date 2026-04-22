@@ -5,16 +5,16 @@ const OVERLAY_ROOT_ID = '__json_ext_overlay_root__'
 const OVERLAY_STYLE_ID = '__json_ext_overlay_style__'
 const QUERY_MODE_INTERCEPT = 'intercept'
 
-function tryGetJsonTextFromPage() {
+function shouldInterceptJsonPage() {
   if (window.top !== window) {
-    return null
+    return false
   }
 
   const contentType = document.contentType.toLowerCase()
   const pageText = document.body?.innerText?.trim()
 
   if (!pageText || pageText.length < MIN_JSON_LENGTH) {
-    return null
+    return false
   }
 
   const looksLikeJsonByType =
@@ -23,16 +23,7 @@ function tryGetJsonTextFromPage() {
     (pageText.startsWith('{') && pageText.endsWith('}')) ||
     (pageText.startsWith('[') && pageText.endsWith(']'))
 
-  if (!looksLikeJsonByType && !looksLikeJsonByContent) {
-    return null
-  }
-
-  try {
-    JSON.parse(pageText)
-    return pageText
-  } catch {
-    return null
-  }
+  return looksLikeJsonByType || looksLikeJsonByContent
 }
 
 function getInterceptUrl(sourceUrl: string) {
@@ -143,7 +134,6 @@ function mountInterceptOverlay(targetUrl: string) {
   document.documentElement.appendChild(root)
 }
 
-const jsonText = tryGetJsonTextFromPage()
-if (jsonText) {
+if (shouldInterceptJsonPage()) {
   mountInterceptOverlay(getInterceptUrl(location.href))
 }
