@@ -58,6 +58,34 @@ npm run build
 3. 点击「加载已解压的扩展程序」
 4. 选择项目的 `dist/` 目录
 
+## 发布到 Chrome Web Store
+
+### 1. 更新版本号
+
+发布新版本前，先更新 `public/manifest.json` 中的 `version` 字段。打包文件名会从该版本号自动生成，例如 `json-ext-v0.1.1-webstore.zip`。
+
+### 2. 构建并打包 zip
+
+```bash
+npm run build
+VERSION="$(node -p 'require("./public/manifest.json").version')"
+ZIP_NAME="json-ext-v${VERSION}-webstore.zip"
+rm -f "$ZIP_NAME"
+(cd dist && zip -r "../${ZIP_NAME}" . -x '*.DS_Store' '__MACOSX/*')
+```
+
+注意：Chrome Web Store 要求 zip 根目录直接包含 `manifest.json`，因此需要进入 `dist/` 后再打包，不要把整个 `dist/` 目录作为 zip 内的顶层目录。
+
+### 3. 检查 zip 内容
+
+```bash
+VERSION="$(node -p 'require("./public/manifest.json").version')"
+ZIP_NAME="json-ext-v${VERSION}-webstore.zip"
+zipinfo -1 "$ZIP_NAME" | head
+```
+
+输出的前几项应能看到 `manifest.json`、`index.html`、`popup.html`、`background.js` 等文件位于 zip 根目录。确认无误后，在 Chrome Web Store 开发者后台上传该 zip。
+
 ## 常用脚本
 
 - `npm run dev`：启动 Vite 开发服务
