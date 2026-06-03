@@ -14,17 +14,21 @@ import 'katex/dist/katex.min.css'
 import './App.css'
 import {
   createTranslator,
+  getInitialLeftDefaultViewMode,
   getInitialLocale,
+  getInitialRightDefaultViewMode,
   getInitialThemeMode,
   persistLocale,
+  type JsonViewMode,
   type Locale,
   type ThemeMode,
 } from './i18n'
 
-type JsonValue = null | boolean | number | string | JsonValue[] | { [k: string]: JsonValue }
-type ViewMode = 'tree' | 'text' | 'table'
+type JsonValue = null | boolean | number | bigint | string | JsonValue[] | { [k: string]: JsonValue }
+type ViewMode = JsonViewMode
 type PathSegment = string | number
 type JsonPathScope = 'selected' | 'root'
+type JsonPathInput = string | number | boolean | object | unknown[] | null
 type RecursiveSubviewFrame = {
   id: string
   title: string
@@ -57,6 +61,8 @@ const TIMESTAMP_SECONDS_MAX = 4102444800
 const TIMESTAMP_MILLISECONDS_MIN = TIMESTAMP_SECONDS_MIN * 1000
 const TIMESTAMP_MILLISECONDS_MAX = TIMESTAMP_SECONDS_MAX * 1000
 const LARGE_JSON_PARSE_GUARD_CHARS = 2_000_000
+const MAX_SAFE_JSON_INTEGER = BigInt(Number.MAX_SAFE_INTEGER)
+const PRESERVED_INTEGER_MARKER_END = '\u0000'
 
 function getPreferredTheme(): 'light' | 'dark' {
   return window.matchMedia(DARK_MEDIA_QUERY).matches ? 'dark' : 'light'
@@ -65,6 +71,7 @@ function getPreferredTheme(): 'light' | 'dark' {
 type ValueEnhanceOptions = {
   enableImagePreview: boolean
   enableLatexPreview: boolean
+  enableLinkOpening: boolean
 }
 
 type LatexSegment =
@@ -89,6 +96,8 @@ function getNodeType(value: JsonValue): TreeNode['nodeType'] {
   switch (typeof value) {
     case 'object':
       return 'object'
+    case 'bigint':
+      return 'number'
     case 'string':
       return 'string'
     case 'number':
@@ -98,6 +107,188 @@ function getNodeType(value: JsonValue): TreeNode['nodeType'] {
     default:
       return 'null'
   }
+}
+
+function isDigit(char: string | undefined) {
+  return char !== undefined && char >= '0' && char <= '9'
+}
+
+function isNonZeroDigit(char: string | undefined) {
+  return char !== undefined && char >= '1' && char <= '9'
+}
+
+function scanJsonNumberEnd(text: string, startIndex: number) {
+  let index = startIndex
+  if (text[index] === '-') index += 1
+
+  if (text[index] === '0') {
+    index += 1
+  } else if (isNonZeroDigit(text[index])) {
+    index += 1
+    while (isDigit(text[index])) index += 1
+  } else {
+    return null
+  }
+
+  if (text[index] === '.') {
+    index += 1
+    if (!isDigit(text[index])) return null
+    while (isDigit(text[index])) index += 1
+  }
+
+  if (text[index] === 'e' || text[index] === 'E') {
+    index += 1
+    if (text[index] === '+' || text[index] === '-') index += 1
+    if (!isDigit(text[index])) return null
+    while (isDigit(text[index])) index += 1
+  }
+
+  return index
+}
+
+function isUnsafeIntegerLiteral(literal: string) {
+  if (literal.includes('.') || /e/i.test(literal)) return false
+  try {
+    const value = BigInt(literal)
+    return value > MAX_SAFE_JSON_INTEGER || value < -MAX_SAFE_JSON_INTEGER
+  } catch {
+    return false
+  }
+}
+
+function createPreservedIntegerMarker() {
+  return `\u0000json-ext-preserved-integer:${Date.now().toString(36)}:${Math.random()
+    .toString(36)
+    .slice(2)}:`
+}
+
+function protectUnsafeIntegerLiterals(text: string, marker: string) {
+  let transformed = ''
+  const preservedValues = new Set<string>()
+  let index = 0
+
+  while (index < text.length) {
+    const char = text[index]
+
+    if (char === '"') {
+      const start = index
+      index += 1
+      while (index < text.length) {
+        if (text[index] === '\\') {
+          index += 2
+          continue
+        }
+        if (text[index] === '"') {
+          index += 1
+          break
+        }
+        index += 1
+      }
+      transformed += text.slice(start, index)
+      continue
+    }
+
+    if (char === '-' || isDigit(char)) {
+      const end = scanJsonNumberEnd(text, index)
+      if (end === null) {
+        transformed += char
+        index += 1
+        continue
+      }
+      const literal = text.slice(index, end)
+      if (isUnsafeIntegerLiteral(literal)) {
+        const preservedValue = `${marker}${literal}${PRESERVED_INTEGER_MARKER_END}`
+        preservedValues.add(preservedValue)
+        transformed += JSON.stringify(preservedValue)
+      } else {
+        transformed += literal
+      }
+      index = end
+      continue
+    }
+
+    transformed += char
+    index += 1
+  }
+
+  return { transformed, preservedValues }
+}
+
+function restoreUnsafeIntegerLiterals(
+  value: unknown,
+  marker: string,
+  preservedValues: Set<string>,
+): JsonValue {
+  if (typeof value === 'string') {
+    if (preservedValues.has(value)) {
+      const literal = value.slice(marker.length, -PRESERVED_INTEGER_MARKER_END.length)
+      return BigInt(literal)
+    }
+    return value
+  }
+
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') {
+    return value
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => restoreUnsafeIntegerLiterals(item, marker, preservedValues))
+  }
+
+  if (typeof value === 'object') {
+    const restored: Record<string, JsonValue> = {}
+    Object.entries(value as Record<string, unknown>).forEach(([key, item]) => {
+      restored[key] = restoreUnsafeIntegerLiterals(item, marker, preservedValues)
+    })
+    return restored
+  }
+
+  throw new Error('Invalid JSON value')
+}
+
+function parseJsonPreservingUnsafeIntegers(text: string): JsonValue {
+  const marker = createPreservedIntegerMarker()
+  const { transformed, preservedValues } = protectUnsafeIntegerLiterals(text, marker)
+  const parsed = JSON.parse(transformed) as unknown
+  return restoreUnsafeIntegerLiterals(parsed, marker, preservedValues)
+}
+
+function stringifyJson(value: JsonValue, space = 0): string {
+  const indentSize = Math.min(10, Math.max(0, Math.floor(space)))
+  const indentUnit = indentSize > 0 ? ' '.repeat(indentSize) : ''
+
+  const write = (current: JsonValue, depth: number): string => {
+    if (current === null) return 'null'
+
+    if (typeof current === 'string') return JSON.stringify(current)
+    if (typeof current === 'bigint') return current.toString()
+    if (typeof current === 'number') return Number.isFinite(current) ? String(current) : 'null'
+    if (typeof current === 'boolean') return current ? 'true' : 'false'
+
+    if (Array.isArray(current)) {
+      if (current.length === 0) return '[]'
+      const items = current.map((item) => write(item, depth + 1))
+      if (!indentUnit) return `[${items.join(',')}]`
+
+      const nextIndent = indentUnit.repeat(depth + 1)
+      const currentIndent = indentUnit.repeat(depth)
+      return `[\n${items.map((item) => `${nextIndent}${item}`).join(',\n')}\n${currentIndent}]`
+    }
+
+    const entries = Object.entries(current)
+    if (entries.length === 0) return '{}'
+    if (!indentUnit) {
+      return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${write(item, depth + 1)}`).join(',')}}`
+    }
+
+    const nextIndent = indentUnit.repeat(depth + 1)
+    const currentIndent = indentUnit.repeat(depth)
+    return `{\n${entries
+      .map(([key, item]) => `${nextIndent}${JSON.stringify(key)}: ${write(item, depth + 1)}`)
+      .join(',\n')}\n${currentIndent}}`
+  }
+
+  return write(value, 0)
 }
 
 function toObjectChildPath(parentPath: string, key: string) {
@@ -152,7 +343,7 @@ function parseJsonSafely(text: string): ParseJsonResult {
   }
 
   try {
-    return { parsed: JSON.parse(text) as JsonValue, error: '' }
+    return { parsed: parseJsonPreservingUnsafeIntegers(text), error: '' }
   } catch (error) {
     return {
       parsed: undefined,
@@ -315,6 +506,18 @@ function isImageUrl(value: string) {
   }
 }
 
+function getOpenableUrl(value: string) {
+  const candidate = value.trim()
+  if (!candidate || /\s/.test(candidate)) return null
+  try {
+    const parsed = new URL(candidate)
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null
+    return parsed.href
+  } catch {
+    return null
+  }
+}
+
 function isEscapedAt(text: string, index: number) {
   let slashCount = 0
   let cursor = index - 1
@@ -424,8 +627,8 @@ function App() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
   const [loadError, setLoadError] = useState('')
-  const [leftViewMode, setLeftViewMode] = useState<ViewMode>('tree')
-  const [rightViewMode, setRightViewMode] = useState<ViewMode>('text')
+  const [leftViewMode, setLeftViewMode] = useState<ViewMode>(() => getInitialLeftDefaultViewMode())
+  const [rightViewMode, setRightViewMode] = useState<ViewMode>(() => getInitialRightDefaultViewMode())
   const [actionMessage, setActionMessage] = useState('')
   const [actionError, setActionError] = useState('')
   const [jsonPathExpr, setJsonPathExpr] = useState('')
@@ -521,7 +724,7 @@ function App() {
       .catch(() => {
         setLoadError(t('readInterceptFailed'))
       })
-  }, [])
+  }, [t])
 
   const sourceParseSignature = useMemo(() => buildParseApprovalSignature(sourceText), [sourceText])
   const requiresLargeJsonApproval = sourceText.length > LARGE_JSON_PARSE_GUARD_CHARS
@@ -664,7 +867,7 @@ function App() {
       setRightTextError('')
       return
     }
-    setRightTextDraft(JSON.stringify(rightSelectedValue, null, 2))
+    setRightTextDraft(stringifyJson(rightSelectedValue as JsonValue, 2))
     setRightTextError('')
   }, [hasRightSelection, rightSelectedValue, rightLocalSelectedPath])
 
@@ -843,13 +1046,22 @@ function App() {
           </button>
         </div>
 
-        {isContainer && isExpanded && node.children.length > 0 ? (
+        {isContainer && isExpanded ? (
           <>
-            <ul className="tree-list">
-              {node.children.map((child, index) =>
-                renderTree(child, options, depth + 1, index === node.children.length - 1),
-              )}
-            </ul>
+            {node.children.length > 0 ? (
+              <ul className="tree-list">
+                {node.children.map((child, index) =>
+                  renderTree(child, options, depth + 1, index === node.children.length - 1),
+                )}
+              </ul>
+            ) : (
+              <div className="tree-code-row tree-empty-row" style={{ paddingLeft: `${(depth + 1) * 16}px` }}>
+                <span className="tree-toggle-placeholder" />
+                <span className="tree-empty">
+                  {node.nodeType === 'array' ? t('emptyArray') : t('emptyObject')}
+                </span>
+              </div>
+            )}
             <div className="tree-code-row tree-close-row" style={{ paddingLeft: rowPadding }}>
               <span className="tree-toggle-placeholder" />
               <span className="tree-json-brace">
@@ -858,14 +1070,6 @@ function App() {
               </span>
             </div>
           </>
-        ) : isContainer && isExpanded ? (
-          <div className="tree-code-row tree-close-row" style={{ paddingLeft: rowPadding }}>
-            <span className="tree-toggle-placeholder" />
-            <span className="tree-json-brace">
-              {closeToken}
-              {!isLast ? ',' : ''}
-            </span>
-          </div>
         ) : null}
       </li>
     )
@@ -941,16 +1145,29 @@ function App() {
       )
     }
 
+    const openableUrl = enhanceOptions.enableLinkOpening ? getOpenableUrl(value) : null
+    const renderedScalar = openableUrl ? (
+      <a
+        className={`json-scalar ${scalarClass(value)} json-link`}
+        href={openableUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {display}
+      </a>
+    ) : (
+      <span className={`json-scalar ${scalarClass(value)}`}>{display}</span>
+    )
     const imagePreviewUrl = enhanceOptions.enableImagePreview && isImageUrl(value) ? value : null
     const hasHoverEnhancement = Boolean(imagePreviewUrl)
 
     if (!hasHoverEnhancement) {
-      return <span className={`json-scalar ${scalarClass(value)}`}>{display}</span>
+      return renderedScalar
     }
 
     return (
       <span className="enhanced-value">
-        <span className={`json-scalar ${scalarClass(value)}`}>{display}</span>
+        {renderedScalar}
         <span className="value-hover-card">
           {imagePreviewUrl ? (
             <div className="value-preview-section">
@@ -1165,14 +1382,18 @@ function App() {
     if (!rightTextDraft.trim()) {
       throw new Error(t('rightTextEmpty'))
     }
-    return JSON.parse(rightTextDraft) as JsonValue
+    const result = parseJsonSafely(rightTextDraft)
+    if (result.parsed === undefined) {
+      throw new Error(result.error || t('nodeJsonParseFailed'))
+    }
+    return result.parsed
   }
 
   const handleFormat = () =>
     handleAction(() => {
       const value = parseRightDraft()
       setRightTextError('')
-      setRightTextDraft(JSON.stringify(value, null, 2))
+      setRightTextDraft(stringifyJson(value, 2))
       setActionMessage(t('rightTextFormatted'))
     })
 
@@ -1180,7 +1401,7 @@ function App() {
     handleAction(() => {
       const value = parseRightDraft()
       setRightTextError('')
-      setRightTextDraft(JSON.stringify(value))
+      setRightTextDraft(stringifyJson(value))
       setActionMessage(t('rightTextMinified'))
     })
 
@@ -1192,7 +1413,7 @@ function App() {
       }
       const next = JSON.stringify(value).slice(1, -1)
       setRightTextError('')
-      setRightTextDraft(JSON.stringify(next))
+      setRightTextDraft(stringifyJson(next))
       setActionMessage(t('rightTextEscaped'))
     })
 
@@ -1209,7 +1430,7 @@ function App() {
         next = value
       }
       setRightTextError('')
-      setRightTextDraft(JSON.stringify(next))
+      setRightTextDraft(stringifyJson(next))
       const parsedSubview = parseJsonSafely(next).parsed
       if (parsedSubview === undefined) {
         setActionMessage(t('rightTextUnescaped'))
@@ -1259,9 +1480,9 @@ function App() {
       try {
         const result = JSONPath({
           path: jsonPathExpr,
-          json: jsonPathScope === 'root' ? rootValue : (selected as JsonValue),
+          json: (jsonPathScope === 'root' ? rootValue : (selected as JsonValue)) as unknown as JsonPathInput,
           wrap: true,
-        }) as JsonValue[]
+        }) as unknown as JsonValue[]
         setJsonPathResult(result)
         setJsonPathError('')
         setActionMessage(
@@ -1310,7 +1531,7 @@ function App() {
 
   const handleCopyJsonPathResult = async () => {
     if (!jsonPathResult) return
-    const content = JSON.stringify(jsonPathResult, null, 2)
+    const content = stringifyJson(jsonPathResult, 2)
     try {
       await copyText(content)
       setActionError('')
@@ -1331,7 +1552,7 @@ function App() {
     const content =
       rightViewMode === 'text'
         ? rightTextDraft
-        : JSON.stringify((rightSelectedValue as JsonValue) ?? null, null, 2)
+        : stringifyJson((rightSelectedValue as JsonValue) ?? null, 2)
 
     if (!content.trim()) {
       setActionMessage('')
@@ -1361,7 +1582,10 @@ function App() {
       return
     }
     try {
-      JSON.parse(leftTextDraft)
+      const result = parseJsonSafely(leftTextDraft)
+      if (result.parsed === undefined) {
+        throw new Error(result.error || t('jsonParseFailedShort'))
+      }
       setSourceText(leftTextDraft)
       setActionMessage(t('leftTextApplied'))
     } catch (error) {
@@ -1375,7 +1599,11 @@ function App() {
     setActionError('')
     if (!leftTextDraft.trim()) return
     try {
-      const formatted = JSON.stringify(JSON.parse(leftTextDraft) as JsonValue, null, 2)
+      const result = parseJsonSafely(leftTextDraft)
+      if (result.parsed === undefined) {
+        throw new Error(result.error || t('jsonParseFailedShort'))
+      }
+      const formatted = stringifyJson(result.parsed, 2)
       setLeftTextDraft(formatted)
       setActionMessage(t('leftTextFormatted'))
     } catch (error) {
@@ -1394,7 +1622,11 @@ function App() {
     setJsonPathResult(null)
     setJsonPathError('')
     try {
-      const nextValue = JSON.parse(rightTextDraft) as JsonValue
+      const result = parseJsonSafely(rightTextDraft)
+      if (result.parsed === undefined) {
+        throw new Error(result.error || t('nodeJsonParseFailed'))
+      }
+      const nextValue = result.parsed
       if (activeSubview) {
         setSubviewStack((prev) => {
           if (prev.length === 0) return prev
@@ -1415,7 +1647,7 @@ function App() {
       }
       const absolutePath = mergePaths(selectedPath, rightLocalSelectedPath)
       const nextRoot = updateValueAtPath(parsed, absolutePath, nextValue)
-      setSourceText(JSON.stringify(nextRoot, null, 2))
+      setSourceText(stringifyJson(nextRoot, 2))
       setActionMessage(t('rightTextAppliedCurrent'))
     } catch (error) {
       setRightTextError(error instanceof Error ? error.message : t('nodeJsonParseFailed'))
@@ -1578,7 +1810,11 @@ function App() {
               {leftTextError ? <p className="error-text">{t('leftTextError', { error: leftTextError })}</p> : null}
             </div>
           ) : (
-            renderTable(parsed ?? null, 'left', { enableImagePreview: false, enableLatexPreview: false })
+            renderTable(parsed ?? null, 'left', {
+              enableImagePreview: false,
+              enableLatexPreview: false,
+              enableLinkOpening: false,
+            })
           )}
         </section>
 
@@ -1733,6 +1969,7 @@ function App() {
                   renderTable((rightSelectedValue as JsonValue) ?? null, `right:${activeSubview?.id ?? rightContextPath}`, {
                     enableImagePreview: true,
                     enableLatexPreview,
+                    enableLinkOpening: true,
                   })
                 )}
               </div>
@@ -1789,7 +2026,7 @@ function App() {
                     {jsonPathResult.length === 0 ? (
                       <p className="muted">{t('jsonPathNoMatch')}</p>
                     ) : (
-                      <pre>{JSON.stringify(jsonPathResult, null, 2)}</pre>
+                      <pre>{stringifyJson(jsonPathResult, 2)}</pre>
                     )}
                   </div>
                 ) : null}

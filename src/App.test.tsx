@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
 function inputJson(text: string) {
@@ -8,15 +8,15 @@ function inputJson(text: string) {
 }
 
 function clickTreeKey(key: string) {
-  const keyNode = screen.getByText(key)
+  const keyNode = screen.getByText(JSON.stringify(key))
   const labelButton = keyNode.closest('button')
   if (!labelButton) throw new Error(`未找到 key=${key} 对应按钮`)
   fireEvent.click(labelButton)
 }
 
 function clickTreeToggleByKey(key: string) {
-  const keyNode = screen.getByText(key)
-  const row = keyNode.closest('.tree-row')
+  const keyNode = screen.getByText(JSON.stringify(key))
+  const row = keyNode.closest('.tree-code-row')
   const toggle = row?.querySelector<HTMLButtonElement>('.tree-toggle')
   if (!toggle) throw new Error(`未找到 key=${key} 的展开按钮`)
   fireEvent.click(toggle)
@@ -28,6 +28,10 @@ function getCurrentPathText() {
 }
 
 describe('App M3 interactions', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
   it('left selection drives right detail path and value', () => {
     render(<App />)
     inputJson('{"a":{"b":1},"x":2}')
@@ -85,6 +89,77 @@ describe('App M3 interactions', () => {
     expect(getCurrentPathText()).toBe('$.a')
   })
 
+  it('uses configured default view modes for both panes', () => {
+    window.localStorage.setItem('json-ext-left-default-view-mode', 'table')
+    window.localStorage.setItem('json-ext-right-default-view-mode', 'tree')
+
+    render(<App />)
+    inputJson('{"a":{"b":1},"c":2}')
+
+    expect(screen.getAllByText('表格')[0]).toHaveClass('active')
+    expect(screen.getAllByText('树形')[1]).toHaveClass('active')
+    expect(screen.getByText('节点子树')).toBeTruthy()
+    expect(screen.getByText('a')).toBeTruthy()
+  })
+
+  it('preserves unsafe integer JSON numbers across left and right view modes', () => {
+    const unsafeRecordId = '9007199254740993'
+    const roundedRecordId = '9007199254740992'
+    render(<App />)
+    inputJson(`{"record_id":${unsafeRecordId},"nested":{"id":${unsafeRecordId}}}`)
+
+    expect(screen.getByText(unsafeRecordId)).toBeTruthy()
+    expect(screen.queryByText(roundedRecordId)).toBeNull()
+
+    const rightEditor = screen.getByPlaceholderText('编辑当前节点 JSON 后点击应用') as HTMLTextAreaElement
+    expect(rightEditor.value).toContain(`"record_id": ${unsafeRecordId}`)
+    expect(rightEditor.value).not.toContain(roundedRecordId)
+
+    fireEvent.click(screen.getAllByText('表格')[0])
+    expect(screen.getAllByText(unsafeRecordId).length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getAllByText('文本')[0])
+    const leftEditor = screen.getByPlaceholderText('编辑完整 JSON 后点击应用') as HTMLTextAreaElement
+    const leftEditorPanel = leftEditor.closest('.text-editor') as HTMLElement | null
+    if (!leftEditorPanel) throw new Error('左侧文本编辑器未找到')
+    fireEvent.click(within(leftEditorPanel).getByText('格式化'))
+    expect(leftEditor.value).toContain(`"record_id": ${unsafeRecordId}`)
+    expect(leftEditor.value).not.toContain(roundedRecordId)
+
+    fireEvent.click(screen.getAllByText('树形')[1])
+    const rightTreePanel = screen.getByText('节点子树').closest('.tree-panel') as HTMLElement | null
+    if (!rightTreePanel) throw new Error('右侧树面板未找到')
+    expect(within(rightTreePanel).getByText(unsafeRecordId)).toBeTruthy()
+
+    fireEvent.click(screen.getAllByText('表格')[1])
+    expect(screen.getAllByText(unsafeRecordId).length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getAllByText('文本')[1])
+    fireEvent.click(screen.getByText('压缩'))
+    expect(rightEditor.value).toContain(unsafeRecordId)
+    expect(rightEditor.value).not.toContain(roundedRecordId)
+
+    fireEvent.change(screen.getByPlaceholderText('输入 JSONPath，例如 $..id'), {
+      target: { value: '$.record_id' },
+    })
+    fireEvent.click(screen.getByText('执行'))
+    expect(screen.getByText(new RegExp(`\\[\\s*${unsafeRecordId}\\s*\\]`))).toBeTruthy()
+  })
+
+  it('renders right-side table URL string values as links that open in new tabs', () => {
+    render(<App />)
+    inputJson('{"payload":{"url":"https://example.com/report?id=1","plain":"not a link"}}')
+
+    clickTreeKey('payload')
+    fireEvent.click(screen.getAllByText('表格')[1])
+
+    const link = screen.getByRole('link', { name: 'https://example.com/report?id=1' })
+    expect(link).toHaveAttribute('href', 'https://example.com/report?id=1')
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'))
+    expect(screen.queryByRole('link', { name: 'not a link' })).toBeNull()
+  })
+
   it('supports right-side local node selection in detail tree', () => {
     render(<App />)
     inputJson('{"a":{"b":1},"c":2}')
@@ -95,7 +170,7 @@ describe('App M3 interactions', () => {
     const rightTreePanel = screen.getByText('节点子树').closest('.tree-panel') as HTMLElement | null
     if (!rightTreePanel) throw new Error('右侧树面板未找到')
 
-    const keyNode = within(rightTreePanel).getByText('b')
+    const keyNode = within(rightTreePanel).getByText('"b"')
     const labelButton = keyNode.closest('button')
     if (!labelButton) throw new Error('右侧子节点按钮未找到')
     fireEvent.click(labelButton)
@@ -276,7 +351,7 @@ describe('App M3 interactions', () => {
     fireEvent.click(screen.getAllByText('树形')[1])
     const rightTreePanel = screen.getByText('子视图树').closest('.tree-panel') as HTMLElement | null
     if (!rightTreePanel) throw new Error('子视图树面板未找到')
-    const nestedKey = within(rightTreePanel).getByText('nested')
+    const nestedKey = within(rightTreePanel).getByText('"nested"')
     const nestedBtn = nestedKey.closest('button')
     if (!nestedBtn) throw new Error('nested 节点按钮未找到')
     fireEvent.click(nestedBtn)

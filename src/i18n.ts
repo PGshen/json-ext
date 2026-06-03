@@ -1,8 +1,11 @@
 export type Locale = 'zh' | 'en'
 export type ThemeMode = 'system' | 'light' | 'dark'
+export type JsonViewMode = 'tree' | 'text' | 'table'
 
 const LOCALE_STORAGE_KEY = 'json-ext-locale'
 const THEME_STORAGE_KEY = 'json-ext-theme'
+const LEFT_DEFAULT_VIEW_MODE_STORAGE_KEY = 'json-ext-left-default-view-mode'
+const RIGHT_DEFAULT_VIEW_MODE_STORAGE_KEY = 'json-ext-right-default-view-mode'
 
 const messages: Record<Locale, Record<string, string>> = {
   zh: {
@@ -12,6 +15,8 @@ const messages: Record<Locale, Record<string, string>> = {
     themeSystem: '跟随系统',
     themeLight: '浅色',
     themeDark: '暗色',
+    leftDefaultViewModeLabel: '左侧默认模式',
+    rightDefaultViewModeLabel: '右侧默认模式',
     workspaceTitle: '源 JSON',
     sourcePlaceholder: '在此输入 JSON，或通过 JSON 链接自动接管...',
     parsingJson: '正在解析输入中的 JSON...',
@@ -117,6 +122,8 @@ const messages: Record<Locale, Record<string, string>> = {
     themeSystem: 'System',
     themeLight: 'Light',
     themeDark: 'Dark',
+    leftDefaultViewModeLabel: 'Left default view',
+    rightDefaultViewModeLabel: 'Right default view',
     workspaceTitle: 'Source JSON',
     sourcePlaceholder: 'Paste JSON here, or auto-load from a JSON URL...',
     parsingJson: 'Parsing JSON input...',
@@ -228,6 +235,11 @@ function normalizeThemeMode(value: string | null | undefined): ThemeMode {
   return 'system'
 }
 
+function normalizeJsonViewMode(value: string | null | undefined, fallback: JsonViewMode): JsonViewMode {
+  if (value === 'tree' || value === 'text' || value === 'table') return value
+  return fallback
+}
+
 export function getInitialLocale(): Locale {
   try {
     const saved = normalizeLocale(window.localStorage.getItem(LOCALE_STORAGE_KEY))
@@ -257,6 +269,38 @@ export function getInitialThemeMode(): ThemeMode {
 export function persistThemeMode(themeMode: ThemeMode) {
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, themeMode)
+  } catch {
+    // Ignore unavailable storage.
+  }
+}
+
+export function getInitialLeftDefaultViewMode(): JsonViewMode {
+  try {
+    return normalizeJsonViewMode(window.localStorage.getItem(LEFT_DEFAULT_VIEW_MODE_STORAGE_KEY), 'tree')
+  } catch {
+    return 'tree'
+  }
+}
+
+export function persistLeftDefaultViewMode(viewMode: JsonViewMode) {
+  try {
+    window.localStorage.setItem(LEFT_DEFAULT_VIEW_MODE_STORAGE_KEY, viewMode)
+  } catch {
+    // Ignore unavailable storage.
+  }
+}
+
+export function getInitialRightDefaultViewMode(): JsonViewMode {
+  try {
+    return normalizeJsonViewMode(window.localStorage.getItem(RIGHT_DEFAULT_VIEW_MODE_STORAGE_KEY), 'text')
+  } catch {
+    return 'text'
+  }
+}
+
+export function persistRightDefaultViewMode(viewMode: JsonViewMode) {
+  try {
+    window.localStorage.setItem(RIGHT_DEFAULT_VIEW_MODE_STORAGE_KEY, viewMode)
   } catch {
     // Ignore unavailable storage.
   }
